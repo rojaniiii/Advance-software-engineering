@@ -1,23 +1,14 @@
 ﻿
 using StarChart;
 
-StarCollection collection = new StarCollection();
+var starCollection = new StarCollection();
 
-collection.LoadStars("data/hygdata_v41.csv");
+starCollection.LoadStars("data/hygdata_v41.csv");
 
 Console.WriteLine(
-    $"Total stars loaded: {collection.GetStarCount()}"
+    $"Loaded {starCollection.GetStarCount()} stars."
 );
 
-Star? sirius = collection.FindStar("Sirius");
+using var window = new StarChartWindow(starCollection);
 
-if (sirius != null)
-{
-    Console.WriteLine(
-        $"Sirius: X={sirius.X}, Y={sirius.Y}, Z={sirius.Z}"
-    );
-}
-else
-{
-    Console.WriteLine("Sirius was not found.");
-}
+window.Run();
