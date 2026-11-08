@@ -1,4 +1,4 @@
-
+using OpenTK.Windowing.GraphicsLibraryFramework;
 using System;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.Common;
@@ -9,8 +9,11 @@ namespace StarChart;
 
 public class StarChartWindow : GameWindow
 {
+    
     private readonly StarCollection _starCollection;
     private StarRenderer? _renderer;
+    private Vector3 _cameraPosition = new Vector3(0f, 0f, 100f);
+private float _cameraSpeed = 30f;
 
     public StarChartWindow(StarCollection starCollection)
         : base(
@@ -38,6 +41,37 @@ public class StarChartWindow : GameWindow
         Console.WriteLine("3D star renderer ready.");
     }
 
+protected override void OnUpdateFrame(FrameEventArgs args)
+{
+    base.OnUpdateFrame(args);
+
+    if (KeyboardState.IsKeyDown(Keys.Escape))
+    {
+        Close();
+        return;
+    }
+
+    float movement = _cameraSpeed * (float)args.Time;
+
+    if (KeyboardState.IsKeyDown(Keys.W))
+        _cameraPosition.Z -= movement;
+
+    if (KeyboardState.IsKeyDown(Keys.S))
+        _cameraPosition.Z += movement;
+
+    if (KeyboardState.IsKeyDown(Keys.A))
+        _cameraPosition.X -= movement;
+
+    if (KeyboardState.IsKeyDown(Keys.D))
+        _cameraPosition.X += movement;
+
+    if (KeyboardState.IsKeyDown(Keys.Space))
+        _cameraPosition.Y += movement;
+
+    if (KeyboardState.IsKeyDown(Keys.LeftShift))
+        _cameraPosition.Y -= movement;
+}
+
     protected override void OnRenderFrame(FrameEventArgs args)
     {
         base.OnRenderFrame(args);
@@ -54,9 +88,10 @@ public class StarChartWindow : GameWindow
         );
 
         Matrix4 view = Matrix4.LookAt(
-            new Vector3(0f, 0f, 100f),
-            Vector3.Zero,
-            Vector3.UnitY
+         _cameraPosition,
+        _cameraPosition - Vector3.UnitZ,
+         Vector3.UnitY
+
         );
 
         Matrix4 viewProjection = view * projection;
@@ -72,3 +107,4 @@ public class StarChartWindow : GameWindow
         base.OnUnload();
     }
 }
+
