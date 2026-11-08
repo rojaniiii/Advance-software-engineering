@@ -1,5 +1,6 @@
 
 using System;
+using System.Linq;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.GraphicsLibraryFramework;
@@ -11,7 +12,9 @@ namespace StarChart;
 public class StarChartWindow : GameWindow
 {
     private readonly StarCollection _starCollection;
+
     private StarRenderer? _renderer;
+    private StarLabelRenderer? _labelRenderer;
 
     // Camera settings
     private Vector3 _cameraPosition = new Vector3(0f, 0f, 100f);
@@ -22,10 +25,13 @@ public class StarChartWindow : GameWindow
     private float _pitch = 0f;
     private float _rotationSpeed = 90f;
 
-    // Mouse and trackpad settings
+    // Mouse settings
     private float _mouseSensitivity = 0.15f;
     private Vector2 _lastMousePosition;
     private bool _isRotating = false;
+
+    // Maximum number of named stars in F mode
+    private const int MaxNamedStars = 50;
 
     public StarChartWindow(StarCollection starCollection)
         : base(
@@ -41,7 +47,6 @@ public class StarChartWindow : GameWindow
         _starCollection = starCollection;
     }
 
-    // Initialise the 3D window
     protected override void OnLoad()
     {
         base.OnLoad();
@@ -50,6 +55,7 @@ public class StarChartWindow : GameWindow
         GL.Enable(EnableCap.ProgramPointSize);
 
         _renderer = new StarRenderer(_starCollection);
+        _labelRenderer = new StarLabelRenderer();
 
         Console.WriteLine("3D star renderer ready.");
         Console.WriteLine("Use WASD to move.");
@@ -57,15 +63,17 @@ public class StarChartWindow : GameWindow
         Console.WriteLine("Use Space and Shift to move vertically.");
         Console.WriteLine("Use the trackpad to zoom.");
         Console.WriteLine("Right-click and drag to rotate.");
-        Console.WriteLine("Press F to filter stars by proper name.");
+        Console.WriteLine("Press F to show up to 50 named stars.");
         Console.WriteLine("Press ESC to exit.");
     }
 
-    // Calculate the direction the camera is facing
     private Vector3 GetCameraForward()
     {
-        float yawRadians = MathHelper.DegreesToRadians(_yaw);
-        float pitchRadians = MathHelper.DegreesToRadians(_pitch);
+        float yawRadians =
+            MathHelper.DegreesToRadians(_yaw);
+
+        float pitchRadians =
+            MathHelper.DegreesToRadians(_pitch);
 
         Vector3 direction = new Vector3(
             MathF.Cos(yawRadians) * MathF.Cos(pitchRadians),
@@ -76,19 +84,18 @@ public class StarChartWindow : GameWindow
         return Vector3.Normalize(direction);
     }
 
-    // Handle keyboard navigation and filtering
     protected override void OnUpdateFrame(FrameEventArgs args)
     {
         base.OnUpdateFrame(args);
 
-        // Close the application
+        // Exit
         if (KeyboardState.IsKeyDown(Keys.Escape))
         {
             Close();
             return;
         }
 
-        // Toggle between all stars and properly named stars
+        // Toggle named-star mode
         if (KeyboardState.IsKeyPressed(Keys.F))
         {
             _renderer?.ToggleNamedStars();
@@ -98,7 +105,7 @@ public class StarChartWindow : GameWindow
         float movement = _cameraSpeed * deltaTime;
         float rotation = _rotationSpeed * deltaTime;
 
-        // Rotate camera using arrow keys
+        // Camera rotation
         if (KeyboardState.IsKeyDown(Keys.Left))
             _yaw -= rotation;
 
@@ -111,31 +118,27 @@ public class StarChartWindow : GameWindow
         if (KeyboardState.IsKeyDown(Keys.Down))
             _pitch -= rotation;
 
-        // Prevent the camera from rotating too far vertically
         _pitch = MathHelper.Clamp(_pitch, -89f, 89f);
 
-        // Calculate the camera directions
         Vector3 forward = GetCameraForward();
 
         Vector3 right = Vector3.Normalize(
             Vector3.Cross(forward, Vector3.UnitY)
         );
 
-        // Move forward and backward
+        // Camera movement
         if (KeyboardState.IsKeyDown(Keys.W))
             _cameraPosition += forward * movement;
 
         if (KeyboardState.IsKeyDown(Keys.S))
             _cameraPosition -= forward * movement;
 
-        // Move left and right
         if (KeyboardState.IsKeyDown(Keys.A))
             _cameraPosition -= right * movement;
 
         if (KeyboardState.IsKeyDown(Keys.D))
             _cameraPosition += right * movement;
 
-        // Move vertically
         if (KeyboardState.IsKeyDown(Keys.Space))
             _cameraPosition.Y += movement;
 
@@ -143,7 +146,6 @@ public class StarChartWindow : GameWindow
             _cameraPosition.Y -= movement;
     }
 
-    // Rotate camera with right-click and drag
     protected override void OnMouseMove(MouseMoveEventArgs e)
     {
         base.OnMouseMove(e);
@@ -170,7 +172,6 @@ public class StarChartWindow : GameWindow
         _pitch = MathHelper.Clamp(_pitch, -89f, 89f);
     }
 
-    // Zoom using mouse wheel or MacBook trackpad
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
@@ -180,21 +181,22 @@ public class StarChartWindow : GameWindow
         _cameraPosition += forward * e.OffsetY * 5f;
     }
 
-    // Render the 3D star chart
     protected override void OnRenderFrame(FrameEventArgs args)
     {
         base.OnRenderFrame(args);
 
         GL.Clear(ClearBufferMask.ColorBufferBit);
 
-        float aspect = Size.X / (float)Math.Max(1, Size.Y);
+        float aspect =
+            Size.X / (float)Math.Max(1, Size.Y);
 
-        Matrix4 projection = Matrix4.CreatePerspectiveFieldOfView(
-            MathHelper.DegreesToRadians(60f),
-            aspect,
-            0.1f,
-            10000f
-        );
+        Matrix4 projection =
+            Matrix4.CreatePerspectiveFieldOfView(
+                MathHelper.DegreesToRadians(60f),
+                aspect,
+                0.1f,
+                10000f
+            );
 
         Matrix4 view = Matrix4.LookAt(
             _cameraPosition,
@@ -204,14 +206,35 @@ public class StarChartWindow : GameWindow
 
         Matrix4 viewProjection = view * projection;
 
+        // Draw stars
         _renderer?.Draw(viewProjection);
+
+        // Draw labels for the same 50 stars selected in F mode
+        if (_renderer?.ShowNamedOnly == true)
+        {
+            var namedStars = _starCollection.GetNamedStars()
+                .OrderByDescending(star =>
+                    string.Equals(
+                        star.Name,
+                        "Rojani",
+                        StringComparison.OrdinalIgnoreCase))
+                .Take(MaxNamedStars);
+
+            _labelRenderer?.Draw(
+                namedStars,
+                viewProjection,
+                _cameraPosition,
+                Size.X,
+                Size.Y
+            );
+        }
 
         SwapBuffers();
     }
 
-    // Release graphics resources
     protected override void OnUnload()
     {
+        _labelRenderer?.Dispose();
         _renderer?.Dispose();
 
         base.OnUnload();
