@@ -1,5 +1,6 @@
 
 using System;
+using System.Linq;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
@@ -10,44 +11,23 @@ public class StarRenderer : IDisposable
     private readonly int _vertexArray;
     private readonly int _vertexBuffer;
     private readonly int _shaderProgram;
-    private readonly int _starCount;
+    private readonly StarCollection _collection;
+
+    private int _starCount;
+    private bool _showNamedOnly = false;
 
     public StarRenderer(StarCollection collection)
     {
-        int count = Math.Min(collection.Stars.Count, 10000);
-        _starCount = count;
+        _collection = collection;
 
-        // Position (XYZ) + colour (RGB)
-        float[] vertices = new float[count * 6];
+        // Start by displaying up to 10,000 stars
+        float[] vertices = CreateVertices(
+            collection.Stars.Take(10000));
 
-        int colouredStars = 0;
-
-        for (int i = 0; i < count; i++)
-        {
-            Star star = collection.Stars[i];
-            int index = i * 6;
-
-            vertices[index] = (float)star.X;
-            vertices[index + 1] = (float)star.Y;
-            vertices[index + 2] = (float)star.Z;
-
-            Vector3 colour = GetStarColour(star.SpectralType);
-
-            vertices[index + 3] = colour.X;
-            vertices[index + 4] = colour.Y;
-            vertices[index + 5] = colour.Z;
-
-            if (!string.IsNullOrWhiteSpace(star.SpectralType)
-                && "OBAFGKM".Contains(
-                    char.ToUpperInvariant(star.SpectralType.Trim()[0])))
-            {
-                colouredStars++;
-            }
-        }
+        _starCount = vertices.Length / 6;
 
         Console.WriteLine(
-            $"Rendering {_starCount} stars; " +
-            $"{colouredStars} have recognised spectral types.");
+            $"Rendering {_starCount} stars with spectral colours.");
 
         const string vertexShaderSource = """
             #version 330 core
@@ -82,10 +62,12 @@ public class StarRenderer : IDisposable
             """;
 
         int vertexShader = CompileShader(
-            ShaderType.VertexShader, vertexShaderSource);
+            ShaderType.VertexShader,
+            vertexShaderSource);
 
         int fragmentShader = CompileShader(
-            ShaderType.FragmentShader, fragmentShaderSource);
+            ShaderType.FragmentShader,
+            fragmentShaderSource);
 
         _shaderProgram = GL.CreateProgram();
 
@@ -106,40 +88,85 @@ public class StarRenderer : IDisposable
 
         GL.DetachShader(_shaderProgram, vertexShader);
         GL.DetachShader(_shaderProgram, fragmentShader);
+
         GL.DeleteShader(vertexShader);
         GL.DeleteShader(fragmentShader);
 
+        // Create OpenGL buffers
         _vertexArray = GL.GenVertexArray();
         _vertexBuffer = GL.GenBuffer();
 
         GL.BindVertexArray(_vertexArray);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _vertexBuffer);
+        GL.BindBuffer(
+            BufferTarget.ArrayBuffer,
+            _vertexBuffer);
 
         GL.BufferData(
             BufferTarget.ArrayBuffer,
             vertices.Length * sizeof(float),
             vertices,
-            BufferUsageHint.StaticDraw);
+            BufferUsageHint.DynamicDraw);
 
         int stride = 6 * sizeof(float);
 
-        // XYZ coordinates
+        // Position: X, Y, Z
         GL.VertexAttribPointer(
-            0, 3, VertexAttribPointerType.Float,
-            false, stride, 0);
+            0,
+            3,
+            VertexAttribPointerType.Float,
+            false,
+            stride,
+            0);
 
         GL.EnableVertexAttribArray(0);
 
-        // RGB colour
+        // Colour: R, G, B
         GL.VertexAttribPointer(
-            1, 3, VertexAttribPointerType.Float,
-            false, stride, 3 * sizeof(float));
+            1,
+            3,
+            VertexAttribPointerType.Float,
+            false,
+            stride,
+            3 * sizeof(float));
 
         GL.EnableVertexAttribArray(1);
 
         GL.BindVertexArray(0);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
     }
 
+    // Convert a collection of stars into OpenGL vertex data
+    private static float[] CreateVertices(
+        System.Collections.Generic.IEnumerable<Star> stars)
+    {
+        Star[] selectedStars = stars.ToArray();
+
+        float[] vertices =
+            new float[selectedStars.Length * 6];
+
+        for (int i = 0; i < selectedStars.Length; i++)
+        {
+            Star star = selectedStars[i];
+            int index = i * 6;
+
+            // Star coordinates
+            vertices[index] = (float)star.X;
+            vertices[index + 1] = (float)star.Y;
+            vertices[index + 2] = (float)star.Z;
+
+            // Spectral colour
+            Vector3 colour =
+                GetStarColour(star.SpectralType);
+
+            vertices[index + 3] = colour.X;
+            vertices[index + 4] = colour.Y;
+            vertices[index + 5] = colour.Z;
+        }
+
+        return vertices;
+    }
+
+    // Return a colour based on the star's spectral class
     private static Vector3 GetStarColour(string spectralType)
     {
         if (string.IsNullOrWhiteSpace(spectralType))
@@ -161,10 +188,13 @@ public class StarRenderer : IDisposable
         };
     }
 
+    // Compile an OpenGL shader
     private static int CompileShader(
-        ShaderType type, string source)
+        ShaderType type,
+        string source)
     {
         int shader = GL.CreateShader(type);
+
         GL.ShaderSource(shader, source);
         GL.CompileShader(shader);
 
@@ -174,26 +204,72 @@ public class StarRenderer : IDisposable
             out int success);
 
         if (success == 0)
-            throw new Exception(GL.GetShaderInfoLog(shader));
+        {
+            throw new Exception(
+                GL.GetShaderInfoLog(shader));
+        }
 
         return shader;
     }
 
+    // Toggle between all stars and properly named stars
+    public void ToggleNamedStars()
+    {
+        _showNamedOnly = !_showNamedOnly;
+
+        var selectedStars = _showNamedOnly
+            ? _collection.GetNamedStars()
+            : _collection.Stars;
+
+        float[] vertices = CreateVertices(
+            selectedStars.Take(10000));
+
+        // Update the existing OpenGL buffer
+        GL.BindBuffer(
+            BufferTarget.ArrayBuffer,
+            _vertexBuffer);
+
+        GL.BufferData(
+            BufferTarget.ArrayBuffer,
+            vertices.Length * sizeof(float),
+            vertices,
+            BufferUsageHint.DynamicDraw);
+
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+
+        _starCount = vertices.Length / 6;
+
+        Console.WriteLine(
+            _showNamedOnly
+                ? $"Showing {_starCount} properly named stars."
+                : $"Showing {_starCount} stars.");
+    }
+
+    // Draw stars using the current camera matrices
     public void Draw(Matrix4 viewProjection)
     {
         GL.UseProgram(_shaderProgram);
 
         int location = GL.GetUniformLocation(
-            _shaderProgram, "uViewProjection");
+            _shaderProgram,
+            "uViewProjection");
 
         GL.UniformMatrix4(
-            location, false, ref viewProjection);
+            location,
+            false,
+            ref viewProjection);
 
         GL.BindVertexArray(_vertexArray);
-        GL.DrawArrays(PrimitiveType.Points, 0, _starCount);
+
+        GL.DrawArrays(
+            PrimitiveType.Points,
+            0,
+            _starCount);
+
         GL.BindVertexArray(0);
     }
 
+    // Release OpenGL resources
     public void Dispose()
     {
         GL.DeleteBuffer(_vertexBuffer);

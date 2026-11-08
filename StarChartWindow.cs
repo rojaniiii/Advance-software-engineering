@@ -41,6 +41,7 @@ public class StarChartWindow : GameWindow
         _starCollection = starCollection;
     }
 
+    // Initialise the 3D window
     protected override void OnLoad()
     {
         base.OnLoad();
@@ -55,6 +56,8 @@ public class StarChartWindow : GameWindow
         Console.WriteLine("Use arrow keys to rotate.");
         Console.WriteLine("Use Space and Shift to move vertically.");
         Console.WriteLine("Use the trackpad to zoom.");
+        Console.WriteLine("Right-click and drag to rotate.");
+        Console.WriteLine("Press F to filter stars by proper name.");
         Console.WriteLine("Press ESC to exit.");
     }
 
@@ -73,22 +76,29 @@ public class StarChartWindow : GameWindow
         return Vector3.Normalize(direction);
     }
 
-    // Keyboard navigation
+    // Handle keyboard navigation and filtering
     protected override void OnUpdateFrame(FrameEventArgs args)
     {
         base.OnUpdateFrame(args);
 
+        // Close the application
         if (KeyboardState.IsKeyDown(Keys.Escape))
         {
             Close();
             return;
         }
 
+        // Toggle between all stars and properly named stars
+        if (KeyboardState.IsKeyPressed(Keys.F))
+        {
+            _renderer?.ToggleNamedStars();
+        }
+
         float deltaTime = (float)args.Time;
         float movement = _cameraSpeed * deltaTime;
         float rotation = _rotationSpeed * deltaTime;
 
-        // Arrow keys rotate the camera
+        // Rotate camera using arrow keys
         if (KeyboardState.IsKeyDown(Keys.Left))
             _yaw -= rotation;
 
@@ -101,9 +111,10 @@ public class StarChartWindow : GameWindow
         if (KeyboardState.IsKeyDown(Keys.Down))
             _pitch -= rotation;
 
+        // Prevent the camera from rotating too far vertically
         _pitch = MathHelper.Clamp(_pitch, -89f, 89f);
 
-        // Calculate camera directions
+        // Calculate the camera directions
         Vector3 forward = GetCameraForward();
 
         Vector3 right = Vector3.Normalize(
@@ -124,7 +135,7 @@ public class StarChartWindow : GameWindow
         if (KeyboardState.IsKeyDown(Keys.D))
             _cameraPosition += right * movement;
 
-        // Move up and down
+        // Move vertically
         if (KeyboardState.IsKeyDown(Keys.Space))
             _cameraPosition.Y += movement;
 
@@ -169,7 +180,7 @@ public class StarChartWindow : GameWindow
         _cameraPosition += forward * e.OffsetY * 5f;
     }
 
-    // Render the 3D stars
+    // Render the 3D star chart
     protected override void OnRenderFrame(FrameEventArgs args)
     {
         base.OnRenderFrame(args);
@@ -198,7 +209,7 @@ public class StarChartWindow : GameWindow
         SwapBuffers();
     }
 
-    // Clean up graphics resources
+    // Release graphics resources
     protected override void OnUnload()
     {
         _renderer?.Dispose();

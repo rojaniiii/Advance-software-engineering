@@ -19,6 +19,17 @@ public class StarCollection
     {
         return Stars.Count;
     }
+    // Return stars that have proper names rather than generated HYG IDs
+public List<Star> GetNamedStars()
+{
+    return Stars
+        .Where(star =>
+            !string.IsNullOrWhiteSpace(star.Name) &&
+            !star.Name.StartsWith(
+                "HYG-",
+                StringComparison.OrdinalIgnoreCase))
+        .ToList();
+}
 
     public Star? FindStar(string name)
     {
