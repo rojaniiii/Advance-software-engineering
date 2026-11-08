@@ -14,7 +14,6 @@ public class StarRenderer : IDisposable
     private readonly int _shaderProgram;
     private readonly StarCollection _collection;
 
-    private const int MaxStars = 20000;
     private const int MaxNamedStars = 50;
 
     private int _starCount;
@@ -26,8 +25,9 @@ public class StarRenderer : IDisposable
     {
         _collection = collection;
 
+        // Load ALL available stars, not just the first 20,000
         float[] vertices = CreateVertices(
-            collection.Stars.Take(MaxStars));
+            collection.Stars);
 
         _starCount = vertices.Length / 6;
 
@@ -36,29 +36,47 @@ public class StarRenderer : IDisposable
 
         const string vertexShaderSource = """
             #version 330 core
+
             layout(location = 0) in vec3 aPosition;
             layout(location = 1) in vec3 aColour;
 
             uniform mat4 uViewProjection;
+
             out vec3 starColour;
 
             void main()
             {
                 gl_Position =
                     uViewProjection * vec4(aPosition, 1.0);
+
                 gl_PointSize = 3.0;
+
                 starColour = aColour;
             }
             """;
 
         const string fragmentShaderSource = """
             #version 330 core
+
             in vec3 starColour;
             out vec4 FragColor;
 
             void main()
             {
-                FragColor = vec4(starColour, 1.0);
+                vec2 p = gl_PointCoord * 2.0 - 1.0;
+
+                float radius = length(p);
+
+                if (radius > 1.0)
+                    discard;
+
+                float brightness =
+                    1.0 - radius * 0.35;
+
+                FragColor = vec4(
+                    starColour * brightness,
+                    1.0
+                );
             }
             """;
 
@@ -72,8 +90,14 @@ public class StarRenderer : IDisposable
 
         _shaderProgram = GL.CreateProgram();
 
-        GL.AttachShader(_shaderProgram, vertexShader);
-        GL.AttachShader(_shaderProgram, fragmentShader);
+        GL.AttachShader(
+            _shaderProgram,
+            vertexShader);
+
+        GL.AttachShader(
+            _shaderProgram,
+            fragmentShader);
+
         GL.LinkProgram(_shaderProgram);
 
         GL.GetProgram(
@@ -85,8 +109,14 @@ public class StarRenderer : IDisposable
             throw new Exception(
                 GL.GetProgramInfoLog(_shaderProgram));
 
-        GL.DetachShader(_shaderProgram, vertexShader);
-        GL.DetachShader(_shaderProgram, fragmentShader);
+        GL.DetachShader(
+            _shaderProgram,
+            vertexShader);
+
+        GL.DetachShader(
+            _shaderProgram,
+            fragmentShader);
+
         GL.DeleteShader(vertexShader);
         GL.DeleteShader(fragmentShader);
 
@@ -94,7 +124,10 @@ public class StarRenderer : IDisposable
         _vertexBuffer = GL.GenBuffer();
 
         GL.BindVertexArray(_vertexArray);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, _vertexBuffer);
+
+        GL.BindBuffer(
+            BufferTarget.ArrayBuffer,
+            _vertexBuffer);
 
         GL.BufferData(
             BufferTarget.ArrayBuffer,
@@ -105,40 +138,52 @@ public class StarRenderer : IDisposable
         int stride = 6 * sizeof(float);
 
         GL.VertexAttribPointer(
-            0, 3,
+            0,
+            3,
             VertexAttribPointerType.Float,
-            false, stride, 0);
+            false,
+            stride,
+            0);
 
         GL.EnableVertexAttribArray(0);
 
         GL.VertexAttribPointer(
-            1, 3,
+            1,
+            3,
             VertexAttribPointerType.Float,
-            false, stride,
+            false,
+            stride,
             3 * sizeof(float));
 
         GL.EnableVertexAttribArray(1);
 
         GL.BindVertexArray(0);
-        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+
+        GL.BindBuffer(
+            BufferTarget.ArrayBuffer,
+            0);
     }
 
     private static float[] CreateVertices(
         IEnumerable<Star> stars)
     {
         Star[] selectedStars = stars.ToArray();
-        float[] vertices = new float[selectedStars.Length * 6];
+
+        float[] vertices =
+            new float[selectedStars.Length * 6];
 
         for (int i = 0; i < selectedStars.Length; i++)
         {
             Star star = selectedStars[i];
+
             int index = i * 6;
 
             vertices[index] = (float)star.X;
             vertices[index + 1] = (float)star.Y;
             vertices[index + 2] = (float)star.Z;
 
-            Vector3 colour = GetStarColour(star.SpectralType);
+            Vector3 colour =
+                GetStarColour(star.SpectralType);
 
             vertices[index + 3] = colour.X;
             vertices[index + 4] = colour.Y;
@@ -148,7 +193,8 @@ public class StarRenderer : IDisposable
         return vertices;
     }
 
-    private static Vector3 GetStarColour(string spectralType)
+    private static Vector3 GetStarColour(
+        string spectralType)
     {
         if (string.IsNullOrWhiteSpace(spectralType))
             return new Vector3(1f, 1f, 1f);
@@ -170,9 +216,11 @@ public class StarRenderer : IDisposable
     }
 
     private static int CompileShader(
-        ShaderType type, string source)
+        ShaderType type,
+        string source)
     {
         int shader = GL.CreateShader(type);
+
         GL.ShaderSource(shader, source);
         GL.CompileShader(shader);
 
@@ -188,7 +236,6 @@ public class StarRenderer : IDisposable
         return shader;
     }
 
-    // Press F to switch between 20,000 stars and 50 named stars
     public void ToggleNamedStars()
     {
         _showNamedOnly = !_showNamedOnly;
@@ -202,9 +249,10 @@ public class StarRenderer : IDisposable
                             "Rojani",
                             StringComparison.OrdinalIgnoreCase))
                     .Take(MaxNamedStars)
-                : _collection.Stars.Take(MaxStars);
+                : _collection.Stars;
 
-        float[] vertices = CreateVertices(selectedStars);
+        float[] vertices =
+            CreateVertices(selectedStars);
 
         GL.BindBuffer(
             BufferTarget.ArrayBuffer,
@@ -216,13 +264,15 @@ public class StarRenderer : IDisposable
             vertices,
             BufferUsageHint.DynamicDraw);
 
-        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+        GL.BindBuffer(
+            BufferTarget.ArrayBuffer,
+            0);
 
         _starCount = vertices.Length / 6;
 
         Console.WriteLine(
             _showNamedOnly
-                ? $"Showing {_starCount} properly named stars."
+                ? $"Showing {_starCount} named stars."
                 : $"Showing {_starCount} stars.");
     }
 
