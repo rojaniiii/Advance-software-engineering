@@ -8,24 +8,23 @@ namespace StarChart;
 public class StarNavigation
 {
     private readonly List<Star> _destinations;
-    private readonly List<Star> _searchableStars;
-
-    private int _selectedIndex = 0;
+    private readonly StarCollection _collection;
+    private int _selectedIndex;
     private Star? _searchedStar;
 
-    private const int MaxDestinations = 10;
     private const double LightYearsPerParsec = 3.26156;
 
     public IReadOnlyList<Star> Destinations => _destinations;
 
-    public Star? SelectedStar =>
-        _searchedStar ??
+    public Star? SelectedStar => _searchedStar ??
         (_destinations.Count > 0
             ? _destinations[_selectedIndex]
             : null);
 
     public StarNavigation(StarCollection collection)
     {
+        _collection = collection;
+
         string[] preferredNames =
         {
             "Sirius", "Vega", "Altair", "Procyon",
@@ -33,43 +32,26 @@ public class StarNavigation
             "Capella", "Deneb", "Polaris"
         };
 
-        _searchableStars = collection.Stars
-            .Where(s => !string.IsNullOrWhiteSpace(s.Name))
-            .ToList();
+        var namedStars = collection.GetNamedStars();
 
         _destinations = preferredNames
-            .Select(name => _searchableStars.FirstOrDefault(s =>
-                string.Equals(s.Name, name,
+            .Select(name => namedStars.FirstOrDefault(star =>
+                string.Equals(star.Name, name,
                     StringComparison.OrdinalIgnoreCase)))
-            .Where(s => s != null)
-            .Select(s => s!)
+            .Where(star => star != null)
+            .Select(star => star!)
             .ToList();
 
-        Console.WriteLine("=== STAR NAVIGATION ===");
-        Console.WriteLine($"Searchable stars: {_searchableStars.Count}");
+        Console.WriteLine("\n=== STAR NAVIGATION ===");
         ShowDestinationList();
     }
 
     public void ShowDestinationList()
     {
-        Console.WriteLine();
-        Console.WriteLine("=== NAVIGATION DESTINATIONS ===");
-
         for (int i = 0; i < _destinations.Count; i++)
         {
-            string selected =
-                _searchedStar == null && i == _selectedIndex
-                    ? " < SELECTED"
-                    : "";
-
             Console.WriteLine(
-                $"{i + 1}. {_destinations[i].Name}{selected}");
-        }
-
-        if (_searchedStar != null)
-        {
-            Console.WriteLine(
-                $"Current selection: {_searchedStar.Name}");
+                $"{i + 1}. {_destinations[i].Name}");
         }
     }
 
@@ -96,61 +78,57 @@ public class StarNavigation
         ShowSelection();
     }
 
-    // Select a clicked star and update the navigation list.
     public void SelectStar(Star star)
     {
         int index = _destinations.FindIndex(s =>
             string.Equals(s.Name, star.Name,
                 StringComparison.OrdinalIgnoreCase));
 
-        if (index >= 0)
-        {
-            _selectedIndex = index;
-            _searchedStar = null;
-        }
-        else
+        if (index < 0)
         {
             _destinations.Insert(0, star);
 
-            if (_destinations.Count > MaxDestinations)
-                _destinations.RemoveAt(_destinations.Count - 1);
+            if (_destinations.Count > 10)
+                _destinations.RemoveAt(
+                    _destinations.Count - 1);
 
-            _selectedIndex = 0;
-            _searchedStar = null;
+            index = 0;
         }
+
+        _selectedIndex = index;
+        _searchedStar = null;
 
         Console.WriteLine($"Clicked star: {star.Name}");
         ShowDestinationList();
         ShowSelection();
     }
 
-    public bool SearchStar(string searchText)
+    public bool SearchStar(string search)
     {
-        if (string.IsNullOrWhiteSpace(searchText))
+        return SearchByName(search);
+    }
+
+    public bool SearchByName(string search)
+    {
+        if (string.IsNullOrWhiteSpace(search))
             return false;
 
-        string query = searchText.Trim();
+        string query = search.Trim();
 
-        Star? found = _searchableStars.FirstOrDefault(s =>
+        Star? match = _collection.Stars.FirstOrDefault(s =>
+            !string.IsNullOrWhiteSpace(s.Name) &&
             string.Equals(s.Name, query,
                 StringComparison.OrdinalIgnoreCase));
 
-        found ??= _searchableStars.FirstOrDefault(s =>
+        match ??= _collection.Stars.FirstOrDefault(s =>
+            !string.IsNullOrWhiteSpace(s.Name) &&
             s.Name.StartsWith(query,
                 StringComparison.OrdinalIgnoreCase));
 
-        found ??= _searchableStars.FirstOrDefault(s =>
-            s.Name.Contains(query,
-                StringComparison.OrdinalIgnoreCase));
-
-        if (found == null)
-        {
-            Console.WriteLine($"No star found matching '{query}'.");
+        if (match == null)
             return false;
-        }
 
-        _searchedStar = found;
-        Console.WriteLine($"Search result: {found.Name}");
+        _searchedStar = match;
         ShowSelection();
         return true;
     }
@@ -161,7 +139,9 @@ public class StarNavigation
     }
 
     public void ShowSelection(
-        double cameraX, double cameraY, double cameraZ)
+        double cameraX,
+        double cameraY,
+        double cameraZ)
     {
         Star? star = SelectedStar;
         if (star == null) return;
@@ -173,21 +153,30 @@ public class StarNavigation
         double distance = Math.Sqrt(
             dx * dx + dy * dy + dz * dz);
 
-        double bearing =
-            (Math.Atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+       // Bearing: 0° points toward negative Z.
+// 90° points toward positive X.
+double bearing =
+    (Math.Atan2(dx, -dz) * 180.0 / Math.PI + 360) % 360;
 
-        double path = Math.Atan2(
-            dz, Math.Sqrt(dx * dx + dy * dy))
-            * 180 / Math.PI;
-
-        Console.WriteLine();
-        Console.WriteLine($"Selected destination: {star.Name}");
+// Elevation: Y is the vertical axis.
+double elevation = Math.Atan2(
+    dy, Math.Sqrt(dx * dx + dz * dz))
+    * 180.0 / Math.PI;
         Console.WriteLine(
-            $"Coordinates: X={star.X:F2}, Y={star.Y:F2}, Z={star.Z:F2}");
+            $"\nSelected destination: {star.Name}");
+
+        Console.WriteLine(
+            $"Coordinates: X={star.X:F2}, " +
+            $"Y={star.Y:F2}, Z={star.Z:F2}");
+
         Console.WriteLine(
             $"Distance: {distance:F2} pc " +
             $"({distance * LightYearsPerParsec:F2} light-years)");
-        Console.WriteLine($"Bearing: {bearing:F2} degrees");
-        Console.WriteLine($"Path/elevation: {path:F2} degrees");
+
+        Console.WriteLine(
+            $"Bearing: {bearing:F2} degrees");
+
+        Console.WriteLine(
+            $"Path/elevation: {elevation:F2} degrees");
     }
 }
