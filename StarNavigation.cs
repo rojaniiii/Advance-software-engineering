@@ -8,16 +8,21 @@ namespace StarChart;
 public class StarNavigation
 {
     private readonly List<Star> _destinations;
-    private int _selectedIndex = 0;
+    private readonly List<Star> _searchableStars;
 
-    // All navigation stars for permanent labels
+    private int _selectedIndex = 0;
+    private Star? _searchedStar;
+
+    private const double LightYearsPerParsec = 3.26156;
+
     public IReadOnlyList<Star> Destinations => _destinations;
 
-    // Currently selected star
+    // Includes searched stars as well as regular destinations.
     public Star? SelectedStar =>
-        _destinations.Count > 0
+        _searchedStar ??
+        (_destinations.Count > 0
             ? _destinations[_selectedIndex]
-            : null;
+            : null);
 
     public StarNavigation(StarCollection collection)
     {
@@ -35,10 +40,13 @@ public class StarNavigation
             "Polaris"
         };
 
-        var namedStars = collection.GetNamedStars();
+        _searchableStars = collection.Stars
+            .Where(star =>
+                !string.IsNullOrWhiteSpace(star.Name))
+            .ToList();
 
         _destinations = preferredNames
-            .Select(name => namedStars.FirstOrDefault(
+            .Select(name => _searchableStars.FirstOrDefault(
                 star => string.Equals(
                     star.Name,
                     name,
@@ -49,6 +57,8 @@ public class StarNavigation
 
         Console.WriteLine();
         Console.WriteLine("=== STAR NAVIGATION ===");
+        Console.WriteLine(
+            $"Searchable stars: {_searchableStars.Count}");
 
         if (_destinations.Count == 0)
         {
@@ -73,6 +83,8 @@ public class StarNavigation
         if (_destinations.Count == 0)
             return;
 
+        _searchedStar = null;
+
         _selectedIndex =
             (_selectedIndex + 1) % _destinations.Count;
 
@@ -84,6 +96,8 @@ public class StarNavigation
         if (_destinations.Count == 0)
             return;
 
+        _searchedStar = null;
+
         _selectedIndex =
             (_selectedIndex - 1 + _destinations.Count)
             % _destinations.Count;
@@ -91,7 +105,59 @@ public class StarNavigation
         ShowSelection();
     }
 
+    // Search by exact name first, then by name prefix.
+    public bool SearchStar(string searchText)
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            Console.WriteLine("Please enter a star name.");
+            return false;
+        }
+
+        string query = searchText.Trim();
+
+        Star? found = _searchableStars.FirstOrDefault(star =>
+            string.Equals(
+                star.Name,
+                query,
+                StringComparison.OrdinalIgnoreCase));
+
+        found ??= _searchableStars.FirstOrDefault(star =>
+            star.Name.StartsWith(
+                query,
+                StringComparison.OrdinalIgnoreCase));
+
+        found ??= _searchableStars.FirstOrDefault(star =>
+            star.Name.Contains(
+                query,
+                StringComparison.OrdinalIgnoreCase));
+
+        if (found == null)
+        {
+            Console.WriteLine(
+                $"No star found matching '{query}'.");
+            return false;
+        }
+
+        _searchedStar = found;
+
+        Console.WriteLine(
+            $"Search result: {found.Name}");
+
+        ShowSelection();
+
+        return true;
+    }
+
     public void ShowSelection()
+    {
+        ShowSelection(0, 0, 0);
+    }
+
+    public void ShowSelection(
+        double cameraX,
+        double cameraY,
+        double cameraZ)
     {
         Star? star = SelectedStar;
 
@@ -107,12 +173,36 @@ public class StarNavigation
             $"Y={star.Y:F2}, " +
             $"Z={star.Z:F2}");
 
-        double distance = Math.Sqrt(
-            star.X * star.X +
-            star.Y * star.Y +
-            star.Z * star.Z);
+        double dx = star.X - cameraX;
+        double dy = star.Y - cameraY;
+        double dz = star.Z - cameraZ;
+
+        double distanceParsecs = Math.Sqrt(
+            dx * dx + dy * dy + dz * dz);
+
+        double distanceLightYears =
+            distanceParsecs * LightYearsPerParsec;
+
+        double bearing =
+            Math.Atan2(dx, dy) * 180.0 / Math.PI;
+
+        bearing = (bearing + 360.0) % 360.0;
+
+        double horizontalDistance = Math.Sqrt(
+            dx * dx + dy * dy);
+
+        double pathAngle = Math.Atan2(
+            dz,
+            horizontalDistance) * 180.0 / Math.PI;
 
         Console.WriteLine(
-            $"Distance from origin: {distance:F2} parsecs");
+            $"Distance: {distanceParsecs:F2} parsecs " +
+            $"({distanceLightYears:F2} light-years)");
+
+        Console.WriteLine(
+            $"Bearing: {bearing:F2} degrees");
+
+        Console.WriteLine(
+            $"Path/elevation: {pathAngle:F2} degrees");
     }
 }

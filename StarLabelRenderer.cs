@@ -14,7 +14,7 @@ public sealed class StarLabelRenderer : IDisposable
     private readonly int _vbo;
 
     private const float PixelSize = 2f;
-    private const int MaxLabels = 35;
+    private const int MaxLabels = 50;
 
     private static readonly Dictionary<char, string[]> Font = new()
     {
