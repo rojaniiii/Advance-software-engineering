@@ -1,5 +1,6 @@
 
 using System;
+using System.Linq;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.GraphicsLibraryFramework;
@@ -17,12 +18,12 @@ public class StarChartWindow : GameWindow
     private StarNavigation? _navigation;
     private DestinationRenderer? _destinationRenderer;
 
-    // Camera
     private Vector3 _cameraPosition = Vector3.Zero;
     private float _yaw = -90f;
     private float _pitch = 0f;
 
     private float _cameraSpeed = 15f;
+
     private const float MinCameraSpeed = 1f;
     private const float MaxCameraSpeed = 150f;
     private const float RotationSpeed = 110f;
@@ -32,25 +33,24 @@ public class StarChartWindow : GameWindow
     private Vector2 _lastMousePosition;
     private bool _isRotating;
 
-    // Travel animation
     private bool _isTravelling;
     private Vector3 _travelStart;
     private Vector3 _travelEnd;
     private float _travelElapsed;
+
     private const float TravelDuration = 6f;
     private int _lastProgress = -1;
     private string _destinationName = "";
 
-    // Smooth camera turning
     private bool _isTurning;
     private float _turnStartYaw;
     private float _turnStartPitch;
     private float _turnTargetYaw;
     private float _turnTargetPitch;
     private float _turnElapsed;
+
     private const float TurnDuration = 1.2f;
 
-    // Star search
     private bool _isSearching;
     private string _searchText = "";
     private string _searchMessage = "";
@@ -61,7 +61,7 @@ public class StarChartWindow : GameWindow
             new NativeWindowSettings
             {
                 ClientSize = new Vector2i(1000, 700),
-                Title = "3D Star Chart - Camera Navigation",
+                Title = "3D Star Chart",
                 APIVersion = new Version(3, 3),
                 Profile = ContextProfile.Core
             })
@@ -83,22 +83,22 @@ public class StarChartWindow : GameWindow
 
         Console.WriteLine();
         Console.WriteLine("=== STAR CHART CONTROLS ===");
-        Console.WriteLine("N / P: Select destination");
-        Console.WriteLine("/: Search for a star");
+        Console.WriteLine("LEFT CLICK: Select named star and travel");
+        Console.WriteLine("N / P: Next / previous destination");
+        Console.WriteLine("/: Search for star");
         Console.WriteLine("ENTER: Travel to selected star");
+        Console.WriteLine("X: Cancel journey");
         Console.WriteLine("R: Return home");
-        Console.WriteLine("F: Toggle named-star mode");
+        Console.WriteLine("F: Toggle named stars");
         Console.WriteLine("WASD: Move camera");
-        Console.WriteLine("Arrow keys: Rotate camera");
-        Console.WriteLine("Space / Shift: Move vertically");
-        Console.WriteLine("Trackpad: Controlled zoom");
-        Console.WriteLine("Right-click + drag: Rotate");
-        Console.WriteLine("+ / -: Increase / decrease speed");
-        Console.WriteLine("C: Show camera position");
-        Console.WriteLine("ESC: Exit (or cancel search)");
-        Console.WriteLine();
-        Console.WriteLine(
-            $"Initial camera speed: {_cameraSpeed:F1} pc/s");
+        Console.WriteLine("SHIFT: Move up");
+        Console.WriteLine("SPACE: Move down");
+        Console.WriteLine("Arrow keys: Rotate");
+        Console.WriteLine("Right drag: Rotate");
+        Console.WriteLine("Trackpad: Zoom");
+        Console.WriteLine("+ / -: Change speed");
+        Console.WriteLine("C: Camera coordinates");
+        Console.WriteLine("ESC: Exit or cancel search");
 
         UpdateNavigationDisplay();
     }
@@ -111,8 +111,26 @@ public class StarChartWindow : GameWindow
         return Vector3.Normalize(new Vector3(
             MathF.Cos(yaw) * MathF.Cos(pitch),
             MathF.Sin(pitch),
-            MathF.Sin(yaw) * MathF.Cos(pitch)
-        ));
+            MathF.Sin(yaw) * MathF.Cos(pitch)));
+    }
+
+    private Matrix4 GetViewProjection()
+    {
+        float aspect = Size.X / (float)Math.Max(1, Size.Y);
+
+        Matrix4 projection =
+            Matrix4.CreatePerspectiveFieldOfView(
+                MathHelper.DegreesToRadians(60f),
+                aspect,
+                0.1f,
+                10000f);
+
+        Matrix4 view = Matrix4.LookAt(
+            _cameraPosition,
+            _cameraPosition + GetCameraForward(),
+            Vector3.UnitY);
+
+        return view * projection;
     }
 
     private static float ShortestAngleDifference(
@@ -120,11 +138,8 @@ public class StarChartWindow : GameWindow
     {
         float difference = (target - start) % 360f;
 
-        if (difference > 180f)
-            difference -= 360f;
-
-        if (difference < -180f)
-            difference += 360f;
+        if (difference > 180f) difference -= 360f;
+        if (difference < -180f) difference += 360f;
 
         return difference;
     }
@@ -155,9 +170,7 @@ public class StarChartWindow : GameWindow
     private void FaceSelectedStar()
     {
         Star? star = _navigation?.SelectedStar;
-
-        if (star == null)
-            return;
+        if (star == null) return;
 
         Vector3 destination = new Vector3(
             (float)star.X,
@@ -171,16 +184,13 @@ public class StarChartWindow : GameWindow
             _cameraPosition.Y,
             _cameraPosition.Z);
 
-        Console.WriteLine(
-            $"Turning toward {star.Name}...");
-
+        Console.WriteLine($"Turning toward {star.Name}...");
         UpdateNavigationDisplay();
     }
 
     private void UpdateTurning(float deltaTime)
     {
-        if (!_isTurning)
-            return;
+        if (!_isTurning) return;
 
         _turnElapsed += deltaTime;
 
@@ -231,8 +241,8 @@ public class StarChartWindow : GameWindow
             return;
         }
 
-        float stoppingDistance = MathF.Min(
-            2f, distance * 0.1f);
+        float stoppingDistance =
+            MathF.Min(2f, distance * 0.1f);
 
         _travelEnd = destination -
             Vector3.Normalize(direction) * stoppingDistance;
@@ -247,21 +257,13 @@ public class StarChartWindow : GameWindow
         Console.WriteLine();
         Console.WriteLine($"Travelling to {star.Name}...");
         Console.WriteLine(
-            $"Starting position: X={_travelStart.X:F2}, " +
-            $"Y={_travelStart.Y:F2}, Z={_travelStart.Z:F2}");
-
-        Console.WriteLine(
-            $"Distance: {distance:F2} parsecs " +
+            $"Distance: {distance:F2} pc " +
             $"({distance * 3.26156:F2} light-years)");
-
-        Console.WriteLine(
-            $"Travel duration: {TravelDuration} seconds");
     }
 
     private void UpdateTravel(float deltaTime)
     {
-        if (!_isTravelling)
-            return;
+        if (!_isTravelling) return;
 
         _travelElapsed += deltaTime;
 
@@ -278,7 +280,6 @@ public class StarChartWindow : GameWindow
         if (milestone > _lastProgress)
         {
             _lastProgress = milestone;
-
             Console.WriteLine(
                 $"Travel progress: {Math.Min(milestone * 25, 100)}%");
         }
@@ -292,6 +293,36 @@ public class StarChartWindow : GameWindow
         }
     }
 
+    private void CancelJourney()
+    {
+        if (!_isTravelling && !_isTurning)
+        {
+            Console.WriteLine("No active journey to cancel.");
+            return;
+        }
+
+        _isTravelling = false;
+        _isTurning = false;
+
+        Console.WriteLine("Journey cancelled.");
+        PrintCameraPosition();
+        UpdateNavigationDisplay();
+    }
+
+    private void ReturnHome()
+    {
+        _isTravelling = false;
+        _isTurning = false;
+        _isRotating = false;
+
+        _cameraPosition = Vector3.Zero;
+        _yaw = -90f;
+        _pitch = 0f;
+
+        Console.WriteLine("Returned home.");
+        UpdateNavigationDisplay();
+    }
+
     private void PrintCameraPosition()
     {
         Console.WriteLine(
@@ -300,21 +331,27 @@ public class StarChartWindow : GameWindow
             $"Z={_cameraPosition.Z:F2}");
     }
 
+    private void ChangeCameraSpeed(float multiplier)
+    {
+        _cameraSpeed = MathHelper.Clamp(
+            _cameraSpeed * multiplier,
+            MinCameraSpeed,
+            MaxCameraSpeed);
+
+        Console.WriteLine(
+            $"Camera speed: {_cameraSpeed:F2} pc/s");
+    }
+
     private void BeginSearch()
     {
-        if (_isTravelling)
-            return;
+        if (_isTravelling) return;
 
         _isSearching = true;
         _searchText = "";
         _searchMessage = "";
 
-        Console.WriteLine();
-        Console.WriteLine("=== STAR SEARCH ===");
-        Console.WriteLine("Type a star name.");
-        Console.WriteLine("ENTER: Search");
-        Console.WriteLine("BACKSPACE: Delete character");
-        Console.WriteLine("ESC: Cancel search");
+        Console.WriteLine(
+            "Type a star name; ENTER to search; ESC to cancel.");
 
         UpdateNavigationDisplay();
     }
@@ -326,7 +363,6 @@ public class StarChartWindow : GameWindow
         if (query.Length == 0)
         {
             _searchMessage = "Please type a star name";
-            UpdateNavigationDisplay();
             return;
         }
 
@@ -340,7 +376,7 @@ public class StarChartWindow : GameWindow
             FaceSelectedStar();
 
             Console.WriteLine(
-                "Press ENTER again to travel to this star.");
+                "Press ENTER again to travel.");
         }
         else
         {
@@ -354,18 +390,12 @@ public class StarChartWindow : GameWindow
     {
         base.OnTextInput(e);
 
-        if (!_isSearching)
-            return;
+        if (!_isSearching) return;
 
-        string input = e.AsString;
-
-        foreach (char character in input)
+        foreach (char character in e.AsString)
         {
-            if (char.IsControl(character))
-                continue;
-
-            if (_searchText.Length >= 60)
-                break;
+            if (char.IsControl(character)) continue;
+            if (_searchText.Length >= 60) break;
 
             _searchText += character;
         }
@@ -398,77 +428,145 @@ public class StarChartWindow : GameWindow
         double dy = star.Y - _cameraPosition.Y;
         double dz = star.Z - _cameraPosition.Z;
 
-        double distancePc = Math.Sqrt(
+        double distance = Math.Sqrt(
             dx * dx + dy * dy + dz * dz);
 
-        double distanceLy = distancePc * 3.26156;
-
-        double bearing = Math.Atan2(dx, dy)
-            * 180.0 / Math.PI;
-
-        bearing = (bearing + 360.0) % 360.0;
-
-        double horizontal = Math.Sqrt(
-            dx * dx + dy * dy);
+        double bearing =
+            (Math.Atan2(dx, dy) * 180 / Math.PI + 360) % 360;
 
         double path = Math.Atan2(
-            dz, horizontal) * 180.0 / Math.PI;
+            dz, Math.Sqrt(dx * dx + dy * dy))
+            * 180 / Math.PI;
 
         Title = $"Star Chart | {star.Name} | " +
-                $"{distanceLy:F2} ly | " +
+                $"{distance * 3.26156:F2} ly | " +
                 $"Bearing: {bearing:F1}° | " +
                 $"Path: {path:F1}°";
     }
-private void CancelJourney()
-{
-    if (!_isTravelling && !_isTurning)
+
+    // Convert a star's 3D position to its 2D window position.
+    private bool TryProjectStar(
+        Star star,
+        Matrix4 viewProjection,
+        out Vector2 screenPosition)
     {
-        Console.WriteLine("No active journey to cancel.");
-        return;
+        screenPosition = Vector2.Zero;
+
+        Vector4 world = new Vector4(
+            (float)star.X,
+            (float)star.Y,
+            (float)star.Z,
+            1f);
+
+        Vector4 clip = new Vector4(
+    world.X * viewProjection.M11 +
+    world.Y * viewProjection.M21 +
+    world.Z * viewProjection.M31 +
+    world.W * viewProjection.M41,
+
+    world.X * viewProjection.M12 +
+    world.Y * viewProjection.M22 +
+    world.Z * viewProjection.M32 +
+    world.W * viewProjection.M42,
+
+    world.X * viewProjection.M13 +
+    world.Y * viewProjection.M23 +
+    world.Z * viewProjection.M33 +
+    world.W * viewProjection.M43,
+
+    world.X * viewProjection.M14 +
+    world.Y * viewProjection.M24 +
+    world.Z * viewProjection.M34 +
+    world.W * viewProjection.M44
+);
+
+        if (clip.W <= 0.0001f)
+            return false;
+
+        float x = clip.X / clip.W;
+        float y = clip.Y / clip.W;
+        float z = clip.Z / clip.W;
+
+        if (x < -1f || x > 1f ||
+            y < -1f || y > 1f ||
+            z < -1f || z > 1f)
+            return false;
+
+        screenPosition = new Vector2(
+            (x + 1f) * 0.5f * Size.X,
+            (1f - y) * 0.5f * Size.Y);
+
+        return true;
     }
 
-    _isTravelling = false;
-    _isTurning = false;
-
-    Console.WriteLine("Journey cancelled.");
-    Console.WriteLine("Camera stopped at current position.");
-
-    PrintCameraPosition();
-    UpdateNavigationDisplay();
-}
-    private void ReturnHome()
+    // Detect which named star was clicked.
+    private void SelectStarAt(Vector2 mousePosition)
     {
-        _isTravelling = false;
-        _isTurning = false;
-        _isRotating = false;
+        if (_navigation == null || _renderer == null)
+            return;
 
-        _cameraPosition = Vector3.Zero;
-        _yaw = -90f;
-        _pitch = 0f;
+        Matrix4 matrix = GetViewProjection();
 
-        Console.WriteLine("Returned to starting position.");
-        PrintCameraPosition();
+        Star? closest = null;
+        float closestDistance = 18f;
 
-        UpdateNavigationDisplay();
-    }
+        // In named-only mode, use the displayed 50 stars.
+        // Otherwise, use navigation stars and Rojani.
+        var candidates = _renderer.ShowNamedOnly
+            ? _renderer.NamedStars
+            : _navigation.Destinations
+                .Concat(_starCollection.GetNamedStars()
+                    .Where(s => s.Name == "Rojani"))
+                .ToList();
 
-    private void ChangeCameraSpeed(float multiplier)
-    {
-        _cameraSpeed = MathHelper.Clamp(
-            _cameraSpeed * multiplier,
-            MinCameraSpeed,
-            MaxCameraSpeed);
+        foreach (Star star in candidates)
+        {
+            if (!TryProjectStar(
+                star, matrix, out Vector2 position))
+                continue;
+
+            float distance =
+                (position - mousePosition).Length;
+
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                closest = star;
+            }
+        }
+
+        if (closest == null)
+        {
+            Console.WriteLine(
+                "No selectable named star at this position.");
+            return;
+        }
+
+        _navigation.SelectStar(closest);
 
         Console.WriteLine(
-            $"Camera speed: {_cameraSpeed:F2} pc/s");
+            $"Mouse selected: {closest.Name}");
+
+        StartTravel();
     }
 
-    protected override void OnUpdateFrame(
-        FrameEventArgs args)
+    protected override void OnMouseDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseDown(e);
+
+        if (e.Button != MouseButton.Left)
+            return;
+
+        if (_isSearching || _isTravelling || _isTurning)
+            return;
+
+        SelectStarAt(MouseState.Position);
+    }
+
+    protected override void OnUpdateFrame(FrameEventArgs args)
     {
         base.OnUpdateFrame(args);
 
-        // Search mode takes priority over all other controls.
         if (_isSearching)
         {
             if (KeyboardState.IsKeyPressed(Keys.Escape))
@@ -476,25 +574,22 @@ private void CancelJourney()
                 _isSearching = false;
                 _searchText = "";
                 _searchMessage = "";
-                UpdateNavigationDisplay();
             }
             else if (KeyboardState.IsKeyPressed(Keys.Backspace))
             {
                 if (_searchText.Length > 0)
-                {
-                    _searchText =
-                        _searchText[..^1];
-                }
+                    _searchText = _searchText[..^1];
 
                 _searchMessage = "";
-                UpdateNavigationDisplay();
             }
-            else if (KeyboardState.IsKeyPressed(Keys.Enter)
-                || KeyboardState.IsKeyPressed(Keys.KeyPadEnter))
+            else if (
+                KeyboardState.IsKeyPressed(Keys.Enter) ||
+                KeyboardState.IsKeyPressed(Keys.KeyPadEnter))
             {
                 FinishSearch();
             }
 
+            UpdateNavigationDisplay();
             return;
         }
 
@@ -504,13 +599,14 @@ private void CancelJourney()
             return;
         }
 
-        float deltaTime = (float)args.Time;
-// Press X to cancel a journey at any time.
-if (KeyboardState.IsKeyPressed(Keys.X))
-{
-    CancelJourney();
-    return;
-}
+        float dt = (float)args.Time;
+
+        if (KeyboardState.IsKeyPressed(Keys.X))
+        {
+            CancelJourney();
+            return;
+        }
+
         if (!_isTravelling &&
             KeyboardState.IsKeyPressed(Keys.Slash))
         {
@@ -522,22 +618,21 @@ if (KeyboardState.IsKeyPressed(Keys.X))
             _renderer?.ToggleNamedStars();
 
         if (KeyboardState.IsKeyPressed(Keys.R))
+        {
             ReturnHome();
+            return;
+        }
 
         if (KeyboardState.IsKeyPressed(Keys.C))
             PrintCameraPosition();
 
-        if (KeyboardState.IsKeyPressed(Keys.Equal)
-            || KeyboardState.IsKeyPressed(Keys.KeyPadAdd))
-        {
+        if (KeyboardState.IsKeyPressed(Keys.Equal) ||
+            KeyboardState.IsKeyPressed(Keys.KeyPadAdd))
             ChangeCameraSpeed(1.5f);
-        }
 
-        if (KeyboardState.IsKeyPressed(Keys.Minus)
-            || KeyboardState.IsKeyPressed(Keys.KeyPadSubtract))
-        {
+        if (KeyboardState.IsKeyPressed(Keys.Minus) ||
+            KeyboardState.IsKeyPressed(Keys.KeyPadSubtract))
             ChangeCameraSpeed(1f / 1.5f);
-        }
 
         if (!_isTravelling &&
             KeyboardState.IsKeyPressed(Keys.N))
@@ -554,19 +649,20 @@ if (KeyboardState.IsKeyPressed(Keys.X))
         }
 
         if (!_isTravelling &&
-            KeyboardState.IsKeyPressed(Keys.Enter))
+            (KeyboardState.IsKeyPressed(Keys.Enter) ||
+             KeyboardState.IsKeyPressed(Keys.KeyPadEnter)))
         {
             StartTravel();
         }
 
-        UpdateTurning(deltaTime);
-        UpdateTravel(deltaTime);
+        UpdateTurning(dt);
+        UpdateTravel(dt);
 
         if (_isTravelling || _isTurning)
             return;
 
-        float movement = _cameraSpeed * deltaTime;
-        float rotation = RotationSpeed * deltaTime;
+        float movement = _cameraSpeed * dt;
+        float rotation = RotationSpeed * dt;
 
         if (KeyboardState.IsKeyDown(Keys.Left))
             _yaw -= rotation;
@@ -599,18 +695,14 @@ if (KeyboardState.IsKeyPressed(Keys.X))
         if (KeyboardState.IsKeyDown(Keys.D))
             _cameraPosition += right * movement;
 
-        // SHIFT = Move upward
-if (KeyboardState.IsKeyDown(Keys.LeftShift)
-    || KeyboardState.IsKeyDown(Keys.RightShift))
-{
-    _cameraPosition.Y += movement;
-}
+        // SHIFT moves upward.
+        if (KeyboardState.IsKeyDown(Keys.LeftShift) ||
+            KeyboardState.IsKeyDown(Keys.RightShift))
+            _cameraPosition.Y += movement;
 
-// SPACE = Move downward
-if (KeyboardState.IsKeyDown(Keys.Space))
-{
-    _cameraPosition.Y -= movement;
-}
+        // SPACE moves downward.
+        if (KeyboardState.IsKeyDown(Keys.Space))
+            _cameraPosition.Y -= movement;
     }
 
     protected override void OnMouseMove(MouseMoveEventArgs e)
@@ -649,42 +741,25 @@ if (KeyboardState.IsKeyDown(Keys.Space))
         if (_isTravelling || _isTurning || _isSearching)
             return;
 
-        float scrollAmount = MathHelper.Clamp(
+        float scroll = MathHelper.Clamp(
             e.OffsetY, -1f, 1f);
 
-        _cameraPosition += GetCameraForward()
-            * scrollAmount * ZoomSensitivity;
+        _cameraPosition +=
+            GetCameraForward() * scroll * ZoomSensitivity;
     }
 
-    protected override void OnRenderFrame(
-        FrameEventArgs args)
+    protected override void OnRenderFrame(FrameEventArgs args)
     {
         base.OnRenderFrame(args);
 
         GL.Clear(ClearBufferMask.ColorBufferBit);
 
-        float aspect = Size.X /
-            (float)Math.Max(1, Size.Y);
+        Matrix4 matrix = GetViewProjection();
 
-        Matrix4 projection =
-            Matrix4.CreatePerspectiveFieldOfView(
-                MathHelper.DegreesToRadians(60f),
-                aspect,
-                0.1f,
-                10000f);
-
-        Matrix4 view = Matrix4.LookAt(
-            _cameraPosition,
-            _cameraPosition + GetCameraForward(),
-            Vector3.UnitY);
-
-        Matrix4 viewProjection = view * projection;
-
-        _renderer?.Draw(viewProjection);
+        _renderer?.Draw(matrix);
 
         _destinationRenderer?.Draw(
-            _navigation?.SelectedStar,
-            viewProjection);
+            _navigation?.SelectedStar, matrix);
 
         if (_navigation != null && _renderer != null)
         {
@@ -694,14 +769,13 @@ if (KeyboardState.IsKeyDown(Keys.Space))
 
             _labelRenderer?.Draw(
                 starsToLabel,
-                viewProjection,
+                matrix,
                 _cameraPosition,
                 Size.X,
                 Size.Y);
         }
 
         UpdateNavigationDisplay();
-
         SwapBuffers();
     }
 
