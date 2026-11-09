@@ -1,6 +1,5 @@
 
 using System;
-using System.Linq;
 using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.GraphicsLibraryFramework;
@@ -15,28 +14,39 @@ public class StarChartWindow : GameWindow
 
     private StarRenderer? _renderer;
     private StarLabelRenderer? _labelRenderer;
+    private StarNavigation? _navigation;
+    private DestinationRenderer? _destinationRenderer;
+    private DustRenderer? _dustRenderer;
 
-    // Camera settings
-    private Vector3 _cameraPosition = new Vector3(0f, 0f, 100f);
-    private float _cameraSpeed = 30f;
+    private readonly CameraController _camera = new();
+    private readonly StarPicker _starPicker = new();
 
-    // Camera rotation
-    private float _yaw = -90f;
-    private float _pitch = 0f;
-    private float _rotationSpeed = 90f;
+    private bool _isTravelling;
+    private Vector3 _travelStart;
+    private Vector3 _travelEnd;
+    private float _travelElapsed;
 
-    // Mouse settings
-    private float _mouseSensitivity = 0.15f;
-    private Vector2 _lastMousePosition;
-    private bool _isRotating = false;
+    private const float TravelDuration = 6f;
+    private int _lastProgress = -1;
+    private string _destinationName = "";
 
-    // Maximum number of named stars in F mode
-    private const int MaxNamedStars = 50;
+    private bool _isTurning;
+    private float _turnStartYaw;
+    private float _turnStartPitch;
+    private float _turnTargetYaw;
+    private float _turnTargetPitch;
+    private float _turnElapsed;
+
+    private const float TurnDuration = 1.2f;
+
+    private bool _isSearching;
+    private string _searchText = "";
+    private string _searchMessage = "";
 
     public StarChartWindow(StarCollection starCollection)
         : base(
             GameWindowSettings.Default,
-            new NativeWindowSettings()
+            new NativeWindowSettings
             {
                 ClientSize = new Vector2i(1000, 700),
                 Title = "3D Star Chart",
@@ -56,129 +66,509 @@ public class StarChartWindow : GameWindow
 
         _renderer = new StarRenderer(_starCollection);
         _labelRenderer = new StarLabelRenderer();
+        _navigation = new StarNavigation(_starCollection);
+        _destinationRenderer = new DestinationRenderer();
+        _dustRenderer = new DustRenderer();
 
-        Console.WriteLine("3D star renderer ready.");
-        Console.WriteLine("Use WASD to move.");
-        Console.WriteLine("Use arrow keys to rotate.");
-        Console.WriteLine("Use Space and Shift to move vertically.");
-        Console.WriteLine("Use the trackpad to zoom.");
-        Console.WriteLine("Right-click and drag to rotate.");
-        Console.WriteLine("Press F to show up to 50 named stars.");
-        Console.WriteLine("Press ESC to exit.");
+        Console.WriteLine("=== STAR CHART CONTROLS ===");
+        Console.WriteLine("LEFT CLICK: Select star or name");
+        Console.WriteLine("N / P: Next / previous destination");
+        Console.WriteLine("/: Search for star");
+        Console.WriteLine("ENTER: Travel to selected star");
+        Console.WriteLine("X: Cancel journey");
+        Console.WriteLine("R: Return home");
+        Console.WriteLine("F: Toggle named stars");
+        Console.WriteLine("WASD: Move camera");
+        Console.WriteLine("SHIFT: Move up");
+        Console.WriteLine("SPACE: Move down");
+        Console.WriteLine("Arrow keys: Rotate");
+        Console.WriteLine("Right drag: Rotate");
+        Console.WriteLine("Trackpad: Zoom");
+        Console.WriteLine("+ / -: Change speed");
+        Console.WriteLine("C: Camera coordinates");
+        Console.WriteLine("ESC: Exit or cancel search");
+
+        UpdateNavigationDisplay();
     }
 
-    private Vector3 GetCameraForward()
+    private Matrix4 GetViewProjection() =>
+        _camera.GetViewProjection(Size.X, Size.Y);
+
+    private static float ShortestAngleDifference(
+        float start, float target)
     {
-        float yawRadians =
-            MathHelper.DegreesToRadians(_yaw);
+        float difference = (target - start) % 360f;
 
-        float pitchRadians =
-            MathHelper.DegreesToRadians(_pitch);
+        if (difference > 180f) difference -= 360f;
+        if (difference < -180f) difference += 360f;
 
-        Vector3 direction = new Vector3(
-            MathF.Cos(yawRadians) * MathF.Cos(pitchRadians),
-            MathF.Sin(pitchRadians),
-            MathF.Sin(yawRadians) * MathF.Cos(pitchRadians)
-        );
+        return difference;
+    }
 
-        return Vector3.Normalize(direction);
+    private void StartTurningToward(Vector3 destination)
+    {
+        Vector3 direction = destination - _camera.Position;
+
+        if (direction.LengthSquared < 0.000001f)
+            return;
+
+        direction = Vector3.Normalize(direction);
+
+        _turnStartYaw = _camera.Yaw;
+        _turnStartPitch = _camera.Pitch;
+
+        _turnTargetYaw = MathHelper.RadiansToDegrees(
+            MathF.Atan2(direction.Z, direction.X));
+
+        _turnTargetPitch = MathHelper.RadiansToDegrees(
+            MathF.Asin(MathHelper.Clamp(
+                direction.Y, -1f, 1f)));
+
+        _turnElapsed = 0f;
+        _isTurning = true;
+    }
+
+    private void FaceSelectedStar()
+    {
+        Star? star = _navigation?.SelectedStar;
+        if (star == null) return;
+
+        Vector3 destination = new Vector3(
+            (float)star.X,
+            (float)star.Y,
+            (float)star.Z);
+
+        StartTurningToward(destination);
+
+        _navigation?.ShowSelection(
+            _camera.Position.X,
+            _camera.Position.Y,
+            _camera.Position.Z);
+
+        Console.WriteLine($"Turning toward {star.Name}...");
+        UpdateNavigationDisplay();
+    }
+
+    private void UpdateTurning(float deltaTime)
+    {
+        if (!_isTurning) return;
+
+        _turnElapsed += deltaTime;
+
+        float t = MathHelper.Clamp(
+            _turnElapsed / TurnDuration, 0f, 1f);
+
+        float smoothT = t * t * (3f - 2f * t);
+
+        float yawDifference = ShortestAngleDifference(
+            _turnStartYaw, _turnTargetYaw);
+
+        _camera.Yaw = _turnStartYaw + yawDifference * smoothT;
+        _camera.Pitch = MathHelper.Lerp(
+            _turnStartPitch, _turnTargetPitch, smoothT);
+
+        if (t >= 1f)
+        {
+            _isTurning = false;
+            _camera.Yaw = _turnTargetYaw;
+            _camera.Pitch = _turnTargetPitch;
+        }
+    }
+
+    private void StartTravel()
+    {
+        Star? star = _navigation?.SelectedStar;
+
+        if (star == null)
+        {
+            Console.WriteLine("No destination selected.");
+            return;
+        }
+
+        Vector3 destination = new Vector3(
+            (float)star.X,
+            (float)star.Y,
+            (float)star.Z);
+
+        _travelStart = _camera.Position;
+
+        Vector3 direction = destination - _travelStart;
+        float distance = direction.Length;
+
+        if (distance < 0.001f)
+        {
+            Console.WriteLine("Already at destination.");
+            return;
+        }
+
+        float stoppingDistance =
+            MathF.Min(2f, distance * 0.1f);
+
+        _travelEnd = destination -
+            Vector3.Normalize(direction) * stoppingDistance;
+
+        _travelElapsed = 0f;
+        _lastProgress = -1;
+        _destinationName = star.Name;
+        _isTravelling = true;
+
+        StartTurningToward(destination);
+
+        Console.WriteLine();
+        Console.WriteLine($"Travelling to {star.Name}...");
+        Console.WriteLine(
+            $"Distance: {distance:F2} pc " +
+            $"({distance * 3.26156:F2} light-years)");
+    }
+
+    private void UpdateTravel(float deltaTime)
+    {
+        if (!_isTravelling) return;
+
+        _travelElapsed += deltaTime;
+
+        float t = MathHelper.Clamp(
+            _travelElapsed / TravelDuration, 0f, 1f);
+
+        float smoothT = t * t * (3f - 2f * t);
+
+        _camera.Position = Vector3.Lerp(
+            _travelStart, _travelEnd, smoothT);
+
+        int milestone = (int)(t * 100) / 25;
+
+        if (milestone > _lastProgress)
+        {
+            _lastProgress = milestone;
+            Console.WriteLine(
+                $"Travel progress: {Math.Min(milestone * 25, 100)}%");
+        }
+
+        if (t >= 1f)
+        {
+            _isTravelling = false;
+            Console.WriteLine(
+                $"Arrived near {_destinationName}!");
+            PrintCameraPosition();
+        }
+    }
+
+    private void CancelJourney()
+    {
+        if (!_isTravelling && !_isTurning)
+        {
+            Console.WriteLine("No active journey to cancel.");
+            return;
+        }
+
+        _isTravelling = false;
+        _isTurning = false;
+
+        Console.WriteLine("Journey cancelled.");
+        PrintCameraPosition();
+        UpdateNavigationDisplay();
+    }
+
+    private void ReturnHome()
+    {
+        _isTravelling = false;
+        _isTurning = false;
+        _camera.Reset();
+
+        Console.WriteLine("Returned home.");
+        UpdateNavigationDisplay();
+    }
+
+    private void PrintCameraPosition()
+    {
+        Console.WriteLine(
+            $"Camera: X={_camera.Position.X:F2}, " +
+            $"Y={_camera.Position.Y:F2}, " +
+            $"Z={_camera.Position.Z:F2}");
+    }
+
+    private void ChangeCameraSpeed(float multiplier)
+    {
+        _camera.ChangeSpeed(multiplier);
+        Console.WriteLine(
+            $"Camera speed: {_camera.Speed:F2} pc/s");
+    }
+
+    private void BeginSearch()
+    {
+        if (_isTravelling) return;
+
+        _isSearching = true;
+        _searchText = "";
+        _searchMessage = "";
+
+        Console.WriteLine(
+            "Type a star name; ENTER to search; ESC to cancel.");
+
+        UpdateNavigationDisplay();
+    }
+
+    private void FinishSearch()
+    {
+        string query = _searchText.Trim();
+
+        if (query.Length == 0)
+        {
+            _searchMessage = "Please type a star name";
+            return;
+        }
+
+        bool found = _navigation?.SearchStar(query) ?? false;
+
+        if (found)
+        {
+            _isSearching = false;
+            _searchMessage = "";
+
+            FaceSelectedStar();
+            Console.WriteLine("Press ENTER again to travel.");
+        }
+        else
+        {
+            _searchMessage = $"No match: {query}";
+        }
+
+        UpdateNavigationDisplay();
+    }
+
+    protected override void OnTextInput(TextInputEventArgs e)
+    {
+        base.OnTextInput(e);
+
+        if (!_isSearching) return;
+
+        foreach (char character in e.AsString)
+        {
+            if (char.IsControl(character)) continue;
+            if (_searchText.Length >= 60) break;
+
+            _searchText += character;
+        }
+
+        _searchMessage = "";
+        UpdateNavigationDisplay();
+    }
+
+    private void UpdateNavigationDisplay()
+    {
+        if (_isSearching)
+        {
+            Title = $"Star Search | {_searchText}_";
+
+            if (!string.IsNullOrWhiteSpace(_searchMessage))
+                Title += $" | {_searchMessage}";
+
+            return;
+        }
+
+        Star? star = _navigation?.SelectedStar;
+
+        if (star == null)
+        {
+            Title = "3D Star Chart";
+            return;
+        }
+
+        double dx = star.X - _camera.Position.X;
+        double dy = star.Y - _camera.Position.Y;
+        double dz = star.Z - _camera.Position.Z;
+
+        double distance = Math.Sqrt(
+            dx * dx + dy * dy + dz * dz);
+
+        double bearing =
+            (Math.Atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
+
+        double path = Math.Atan2(
+            dy, Math.Sqrt(dx * dx + dz * dz))
+            * 180 / Math.PI;
+
+        Title = $"Star Chart | {star.Name} | " +
+                $"{distance * 3.26156:F2} ly | " +
+                $"Bearing: {bearing:F1}° | " +
+                $"Path: {path:F1}°";
+    }
+
+    private void SelectStarAt(Vector2 mousePosition)
+    {
+        if (_navigation == null || _renderer == null)
+            return;
+
+        var candidates = _renderer.ShowNamedOnly
+            ? _renderer.NamedStars
+            : _navigation.Destinations;
+
+        Star? selected =
+            _labelRenderer?.PickLabel(mousePosition);
+
+        selected ??= _starPicker.PickPoint(
+            candidates,
+            mousePosition,
+            GetViewProjection(),
+            Size.X,
+            Size.Y);
+
+        if (selected == null)
+        {
+            Console.WriteLine(
+                "No selectable named star at this position.");
+            return;
+        }
+
+        _navigation.SelectStar(selected);
+
+        Console.WriteLine(
+            $"Mouse selected: {selected.Name}");
+
+        StartTravel();
+    }
+
+    protected override void OnMouseDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseDown(e);
+
+        if (e.Button != MouseButton.Left)
+            return;
+
+        if (_isSearching || _isTravelling || _isTurning)
+            return;
+
+        SelectStarAt(MouseState.Position);
     }
 
     protected override void OnUpdateFrame(FrameEventArgs args)
     {
         base.OnUpdateFrame(args);
 
-        // Exit
+        if (_isSearching)
+        {
+            if (KeyboardState.IsKeyPressed(Keys.Escape))
+            {
+                _isSearching = false;
+                _searchText = "";
+                _searchMessage = "";
+            }
+            else if (KeyboardState.IsKeyPressed(Keys.Backspace))
+            {
+                if (_searchText.Length > 0)
+                    _searchText = _searchText[..^1];
+
+                _searchMessage = "";
+            }
+            else if (
+                KeyboardState.IsKeyPressed(Keys.Enter) ||
+                KeyboardState.IsKeyPressed(Keys.KeyPadEnter))
+            {
+                FinishSearch();
+            }
+
+            UpdateNavigationDisplay();
+            return;
+        }
+
         if (KeyboardState.IsKeyDown(Keys.Escape))
         {
             Close();
             return;
         }
 
-        // Toggle named-star mode
-        if (KeyboardState.IsKeyPressed(Keys.F))
+        float dt = (float)args.Time;
+
+        if (KeyboardState.IsKeyPressed(Keys.X))
         {
-            _renderer?.ToggleNamedStars();
+            CancelJourney();
+            return;
         }
 
-        float deltaTime = (float)args.Time;
-        float movement = _cameraSpeed * deltaTime;
-        float rotation = _rotationSpeed * deltaTime;
+        if (!_isTravelling &&
+            KeyboardState.IsKeyPressed(Keys.Slash))
+        {
+            BeginSearch();
+            return;
+        }
 
-        // Camera rotation
-        if (KeyboardState.IsKeyDown(Keys.Left))
-            _yaw -= rotation;
+        if (KeyboardState.IsKeyPressed(Keys.F))
+            _renderer?.ToggleNamedStars();
 
-        if (KeyboardState.IsKeyDown(Keys.Right))
-            _yaw += rotation;
+        if (KeyboardState.IsKeyPressed(Keys.R))
+        {
+            ReturnHome();
+            return;
+        }
 
-        if (KeyboardState.IsKeyDown(Keys.Up))
-            _pitch += rotation;
+        if (KeyboardState.IsKeyPressed(Keys.C))
+            PrintCameraPosition();
 
-        if (KeyboardState.IsKeyDown(Keys.Down))
-            _pitch -= rotation;
+        if (KeyboardState.IsKeyPressed(Keys.Equal) ||
+            KeyboardState.IsKeyPressed(Keys.KeyPadAdd))
+            ChangeCameraSpeed(1.5f);
 
-        _pitch = MathHelper.Clamp(_pitch, -89f, 89f);
+        if (KeyboardState.IsKeyPressed(Keys.Minus) ||
+            KeyboardState.IsKeyPressed(Keys.KeyPadSubtract))
+            ChangeCameraSpeed(1f / 1.5f);
 
-        Vector3 forward = GetCameraForward();
+        if (!_isTravelling &&
+            KeyboardState.IsKeyPressed(Keys.N))
+        {
+            _navigation?.SelectNext();
+            FaceSelectedStar();
+        }
 
-        Vector3 right = Vector3.Normalize(
-            Vector3.Cross(forward, Vector3.UnitY)
-        );
+        if (!_isTravelling &&
+            KeyboardState.IsKeyPressed(Keys.P))
+        {
+            _navigation?.SelectPrevious();
+            FaceSelectedStar();
+        }
 
-        // Camera movement
-        if (KeyboardState.IsKeyDown(Keys.W))
-            _cameraPosition += forward * movement;
+        if (!_isTravelling &&
+            (KeyboardState.IsKeyPressed(Keys.Enter) ||
+             KeyboardState.IsKeyPressed(Keys.KeyPadEnter)))
+        {
+            StartTravel();
+        }
 
-        if (KeyboardState.IsKeyDown(Keys.S))
-            _cameraPosition -= forward * movement;
+        UpdateTurning(dt);
+        UpdateTravel(dt);
 
-        if (KeyboardState.IsKeyDown(Keys.A))
-            _cameraPosition -= right * movement;
+        
+        // Animate dust only while travelling.
+if (_isTravelling)
+{
+    _dustRenderer?.Update(dt);
+}
 
-        if (KeyboardState.IsKeyDown(Keys.D))
-            _cameraPosition += right * movement;
+        if (_isTravelling || _isTurning)
+            return;
 
-        if (KeyboardState.IsKeyDown(Keys.Space))
-            _cameraPosition.Y += movement;
-
-        if (KeyboardState.IsKeyDown(Keys.LeftShift))
-            _cameraPosition.Y -= movement;
+        _camera.UpdateKeyboard(KeyboardState, dt);
     }
 
     protected override void OnMouseMove(MouseMoveEventArgs e)
     {
         base.OnMouseMove(e);
 
-        if (!MouseState.IsButtonDown(MouseButton.Right))
-        {
-            _isRotating = false;
+        if (_isTravelling || _isTurning || _isSearching)
             return;
-        }
 
-        if (!_isRotating)
-        {
-            _lastMousePosition = e.Position;
-            _isRotating = true;
-            return;
-        }
-
-        Vector2 delta = e.Position - _lastMousePosition;
-        _lastMousePosition = e.Position;
-
-        _yaw += delta.X * _mouseSensitivity;
-        _pitch -= delta.Y * _mouseSensitivity;
-
-        _pitch = MathHelper.Clamp(_pitch, -89f, 89f);
+        _camera.UpdateMouse(
+            e.Position,
+            MouseState.IsButtonDown(MouseButton.Right));
     }
 
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
 
-        Vector3 forward = GetCameraForward();
+        if (_isTravelling || _isTurning || _isSearching)
+            return;
 
-        _cameraPosition += forward * e.OffsetY * 5f;
+        _camera.Zoom(e.OffsetY);
     }
 
     protected override void OnRenderFrame(FrameEventArgs args)
@@ -187,53 +577,42 @@ public class StarChartWindow : GameWindow
 
         GL.Clear(ClearBufferMask.ColorBufferBit);
 
-        float aspect =
-            Size.X / (float)Math.Max(1, Size.Y);
+        Matrix4 matrix = GetViewProjection();
 
-        Matrix4 projection =
-            Matrix4.CreatePerspectiveFieldOfView(
-                MathHelper.DegreesToRadians(60f),
-                aspect,
-                0.1f,
-                10000f
-            );
+        _renderer?.Draw(matrix);
 
-        Matrix4 view = Matrix4.LookAt(
-            _cameraPosition,
-            _cameraPosition + GetCameraForward(),
-            Vector3.UnitY
-        );
+        
+       // Show dust only during a journey.
+if (_isTravelling)
+{
+    _dustRenderer?.Draw(matrix, _camera.Position);
+}
 
-        Matrix4 viewProjection = view * projection;
+        _destinationRenderer?.Draw(
+            _navigation?.SelectedStar, matrix);
 
-        // Draw stars
-        _renderer?.Draw(viewProjection);
-
-        // Draw labels for the same 50 stars selected in F mode
-        if (_renderer?.ShowNamedOnly == true)
+        if (_navigation != null && _renderer != null)
         {
-            var namedStars = _starCollection.GetNamedStars()
-                .OrderByDescending(star =>
-                    string.Equals(
-                        star.Name,
-                        "Rojani",
-                        StringComparison.OrdinalIgnoreCase))
-                .Take(MaxNamedStars);
+            var starsToLabel = _renderer.ShowNamedOnly
+                ? _renderer.NamedStars
+                : _navigation.Destinations;
 
             _labelRenderer?.Draw(
-                namedStars,
-                viewProjection,
-                _cameraPosition,
+                starsToLabel,
+                matrix,
+                _camera.Position,
                 Size.X,
-                Size.Y
-            );
+                Size.Y);
         }
 
+        UpdateNavigationDisplay();
         SwapBuffers();
     }
 
     protected override void OnUnload()
     {
+        _dustRenderer?.Dispose();
+        _destinationRenderer?.Dispose();
         _labelRenderer?.Dispose();
         _renderer?.Dispose();
 

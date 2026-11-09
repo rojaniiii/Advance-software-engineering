@@ -14,7 +14,35 @@ public sealed class StarLabelRenderer : IDisposable
     private readonly int _vbo;
 
     private const float PixelSize = 2f;
-    private const int MaxLabels = 35;
+    private const int MaxLabels = 50;
+    private const float LabelPadding = 5f;
+
+    private readonly List<LabelBox> _labels = new();
+
+    private sealed class LabelBox
+    {
+        public Star Star { get; init; } = null!;
+        public float Left { get; init; }
+        public float Top { get; init; }
+        public float Right { get; init; }
+        public float Bottom { get; init; }
+    }
+
+    public Star? PickLabel(Vector2 pointer)
+    {
+        foreach (LabelBox label in _labels)
+        {
+            if (pointer.X >= label.Left &&
+                pointer.X <= label.Right &&
+                pointer.Y >= label.Top &&
+                pointer.Y <= label.Bottom)
+            {
+                return label.Star;
+            }
+        }
+
+        return null;
+    }
 
     private static readonly Dictionary<char, string[]> Font = new()
     {
@@ -115,8 +143,7 @@ public sealed class StarLabelRenderer : IDisposable
         _vbo = GL.GenBuffer();
 
         GL.BindVertexArray(_vao);
-        GL.BindBuffer(
-            BufferTarget.ArrayBuffer, _vbo);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
 
         GL.VertexAttribPointer(
             0, 2,
@@ -151,6 +178,85 @@ public sealed class StarLabelRenderer : IDisposable
         return shader;
     }
 
+    private static bool Overlaps(LabelBox a, LabelBox b)
+    {
+        return a.Left < b.Right + LabelPadding &&
+               a.Right + LabelPadding > b.Left &&
+               a.Top < b.Bottom + LabelPadding &&
+               a.Bottom + LabelPadding > b.Top;
+    }
+
+    private bool TryPlaceLabel(
+        Star star,
+        float pointX,
+        float pointY,
+        int width,
+        int height,
+        out float labelX,
+        out float labelY)
+    {
+        labelX = 0f;
+        labelY = 0f;
+
+        float textWidth =
+            star.Name.Length * 6f * PixelSize;
+
+        float textHeight = 7f * PixelSize;
+
+        float gap = 12f;
+
+        // Try different positions around the star.
+        Vector2[] offsets =
+        {
+            new Vector2(gap, -textHeight / 2f),
+            new Vector2(-textWidth - gap, -textHeight / 2f),
+            new Vector2(-textWidth / 2f, -textHeight - gap),
+            new Vector2(-textWidth / 2f, gap),
+            new Vector2(gap, -textHeight - gap),
+            new Vector2(-textWidth - gap, -textHeight - gap),
+            new Vector2(gap, gap),
+            new Vector2(-textWidth - gap, gap)
+        };
+
+        foreach (Vector2 offset in offsets)
+        {
+            float x = pointX + offset.X;
+            float y = pointY + offset.Y;
+
+            LabelBox candidate = new()
+            {
+                Star = star,
+                Left = x,
+                Top = y,
+                Right = x + textWidth,
+                Bottom = y + textHeight
+            };
+
+            // Do not place text outside the window.
+            if (candidate.Left < 5f ||
+                candidate.Top < 5f ||
+                candidate.Right > width - 5f ||
+                candidate.Bottom > height - 5f)
+                continue;
+
+            bool occupied = _labels.Any(existing =>
+                Overlaps(candidate, existing));
+
+            if (occupied)
+                continue;
+
+            _labels.Add(candidate);
+
+            labelX = x;
+            labelY = y;
+            return true;
+        }
+
+        // No free position: hide this label instead
+        // of drawing it over another label.
+        return false;
+    }
+
     public void Draw(
         IEnumerable<Star> stars,
         Matrix4 viewProjection,
@@ -158,11 +264,13 @@ public sealed class StarLabelRenderer : IDisposable
         int width,
         int height)
     {
+        _labels.Clear();
+
         if (width <= 0 || height <= 0)
             return;
 
-        var visible =
-            new List<(Star Star, float X, float Y, float Distance)>();
+        var visible = new List<
+            (Star Star, float X, float Y, float Distance)>();
 
         foreach (Star star in stars)
         {
@@ -174,15 +282,15 @@ public sealed class StarLabelRenderer : IDisposable
                     1f),
                 viewProjection);
 
-            if (clip.W <= 0f)
+            if (clip.W <= 0.0001f)
                 continue;
 
             float x = clip.X / clip.W;
             float y = clip.Y / clip.W;
             float z = clip.Z / clip.W;
 
-            if (x < -0.95f || x > 0.95f ||
-                y < -0.95f || y > 0.95f ||
+            if (x < -1f || x > 1f ||
+                y < -1f || y > 1f ||
                 z < -1f || z > 1f)
                 continue;
 
@@ -196,29 +304,56 @@ public sealed class StarLabelRenderer : IDisposable
             visible.Add((star, x, y, distance));
         }
 
-         var selected = visible
-    .OrderByDescending(item =>
-        item.Star.Name.Equals(
-            "Rojani",
-            StringComparison.OrdinalIgnoreCase))
-    .ThenBy(item => item.Distance)
-    .Take(MaxLabels);
+        // Prioritise recognisable stars.
+        string[] priorityNames =
+        {
+            "Rojani", "Sirius", "Vega", "Altair",
+            "Procyon", "Arcturus", "Rigel",
+            "Betelgeuse", "Capella", "Deneb", "Polaris"
+        };
+
+        var selected = visible
+            .OrderBy(item =>
+            {
+                int index = Array.FindIndex(
+                    priorityNames,
+                    name => string.Equals(
+                        name,
+                        item.Star.Name,
+                        StringComparison.OrdinalIgnoreCase));
+
+                return index < 0
+                    ? priorityNames.Length
+                    : index;
+            })
+            .ThenBy(item => item.Distance)
+            .Take(MaxLabels);
 
         List<float> vertices = new();
 
         foreach (var item in selected)
         {
-            float screenX =
-                (item.X + 1f) * width / 2f + 8f;
+            float pointX =
+                (item.X + 1f) * width / 2f;
 
-            float screenY =
-                (1f - item.Y) * height / 2f - 8f;
+            float pointY =
+                (1f - item.Y) * height / 2f;
+
+            if (!TryPlaceLabel(
+                item.Star,
+                pointX,
+                pointY,
+                width,
+                height,
+                out float labelX,
+                out float labelY))
+                continue;
 
             AddText(
                 vertices,
                 item.Star.Name,
-                screenX,
-                screenY,
+                labelX,
+                labelY,
                 width,
                 height);
         }
@@ -259,8 +394,7 @@ public sealed class StarLabelRenderer : IDisposable
         int width,
         int height)
     {
-        foreach (char character
-            in text.ToUpperInvariant())
+        foreach (char character in text.ToUpperInvariant())
         {
             if (!Font.TryGetValue(
                 character, out string[]? glyph))
@@ -276,11 +410,8 @@ public sealed class StarLabelRenderer : IDisposable
                     if (glyph[row][col] != '1')
                         continue;
 
-                    float left =
-                        x + col * PixelSize;
-
-                    float top =
-                        y + row * PixelSize;
+                    float left = x + col * PixelSize;
+                    float top = y + row * PixelSize;
 
                     AddRectangle(
                         vertices,

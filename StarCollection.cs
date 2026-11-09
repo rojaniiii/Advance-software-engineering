@@ -1,3 +1,4 @@
+
 using System;
 using System.Globalization;
 using System.IO;
@@ -19,22 +20,26 @@ public class StarCollection
     {
         return Stars.Count;
     }
-    // Return stars that have proper names rather than generated HYG IDs
-public List<Star> GetNamedStars()
-{
-    return Stars
-        .Where(star =>
-            !string.IsNullOrWhiteSpace(star.Name) &&
-            !star.Name.StartsWith(
-                "HYG-",
-                StringComparison.OrdinalIgnoreCase))
-        .ToList();
-}
+
+    // Return properly named stars, excluding generated HYG IDs.
+    public List<Star> GetNamedStars()
+    {
+        return Stars
+            .Where(star =>
+                !string.IsNullOrWhiteSpace(star.Name) &&
+                !star.Name.StartsWith(
+                    "HYG-",
+                    StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
 
     public Star? FindStar(string name)
     {
         return Stars.Find(star =>
-            star.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            string.Equals(
+                star.Name,
+                name,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     public void LoadStars(string filePath)
@@ -78,6 +83,7 @@ public List<Star> GetNamedStars()
         }
 
         int skipped = 0;
+        int loadedFromCsv = 0;
 
         while (!reader.EndOfStream)
         {
@@ -128,10 +134,10 @@ public List<Star> GetNamedStars()
 
             if (string.IsNullOrWhiteSpace(name))
             {
-                name = "HYG-" + values[idIndex].Trim().Trim('"');
+                name = "HYG-" +
+                    values[idIndex].Trim().Trim('"');
             }
 
-            // Read spectral classification
             string spectralType =
                 values[spectralIndex].Trim().Trim('"');
 
@@ -147,9 +153,33 @@ public List<Star> GetNamedStars()
                 z,
                 spectralType
             ));
+
+            loadedFromCsv++;
+        }
+
+        // Add a fictional demonstration star named Rojani.
+        // This is not part of the original HYG catalogue.
+        // Coordinates place it in front of the initial camera.
+        if (FindStar("Rojani") == null)
+        {
+            AddStar(new Star(
+                "Rojani",
+                0,
+                0,
+                -20,
+                "G"
+            ));
+
+            Console.WriteLine(
+                "Custom demonstration star Rojani added!");
         }
 
         Console.WriteLine($"Skipped rows: {skipped}");
-        Console.WriteLine($"Loaded {Stars.Count} stars with spectral data.");
+
+        Console.WriteLine(
+            $"Loaded {loadedFromCsv} stars from HYG data.");
+
+        Console.WriteLine(
+            $"Total stars including custom stars: {Stars.Count}");
     }
 }
